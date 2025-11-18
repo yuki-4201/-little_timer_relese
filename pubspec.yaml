@@ -12,6 +12,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   shared_preferences: ^2.2.3
   intl: ^0.18.1
+  screenshot: ^2.1.0 # 追加
+  share_plus: ^7.0.2
+  flutter_file_dialog: ^3.0.1
+  encrypt: ^5.0.1
 
 dev_dependencies:
   flutter_test:
