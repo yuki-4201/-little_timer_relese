@@ -5,6 +5,11 @@ import 'dart:async';
 import 'dart:math' as math; 
 import 'package:flutter/cupertino.dart'; 
 import 'dart:ui' as ui; 
+import 'package:flutter/rendering.dart'; 
+import 'package:share_plus/share_plus.dart'; 
+import 'package:path_provider/path_provider.dart'; 
+import 'dart:io'; 
+import 'dart:typed_data'; 
 
 // 粒度定数
 const String GRAN_YEAR = '年';
@@ -16,7 +21,7 @@ const List<String> GRANULARITIES = [GRAN_YEAR, GRAN_MONTH, GRAN_WEEK, GRAN_DAY];
 // TimerPageと共有されるキー
 const String _historyKey = 'stopwatch_history_list'; 
 
-// 履歴データを保持するためのモデルクラス (変更なし)
+// 履歴データを保持するためのモデルクラス
 class TimeEntry {
   final int milliseconds;
   final String formattedTime;
@@ -26,7 +31,7 @@ class TimeEntry {
   TimeEntry(this.milliseconds, this.formattedTime, this.timestamp, this.subject);
 }
 
-// 教科別集計データを保持するためのモデルクラス (変更なし)
+// 教科別集計データを保持するためのモデルクラス
 class SubjectTime {
   final String subject;
   final int totalMilliseconds;
@@ -34,7 +39,7 @@ class SubjectTime {
   SubjectTime(this.subject, this.totalMilliseconds, this.formattedTime);
 }
 
-// 日別集計データを保持するためのモデルクラス (変更なし)
+// 日別集計データを保持するためのモデルクラス
 class DailyTime {
   final DateTime date;
   final int totalMilliseconds;
@@ -49,10 +54,10 @@ class DailyTime {
 class LeaderboardPage extends StatefulWidget {
   const LeaderboardPage({super.key});
   @override
-  State<LeaderboardPage> createState() => _LeaderboardPageState();
+  State<LeaderboardPage> createState() => LeaderboardPageState();
 }
 
-class _LeaderboardPageState extends State<LeaderboardPage> {
+class LeaderboardPageState extends State<LeaderboardPage> {
   bool _isLoading = true;
   List<TimeEntry> _historyList = []; 
   
@@ -76,6 +81,9 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
     Colors.brown, 
     Colors.pink
   ];
+  
+  // 共有機能のための GlobalKey
+  final GlobalKey _combinedChartKey = GlobalKey();
 
   @override
   void initState() {
@@ -137,7 +145,6 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
     }
     
     List<String> sortedKeys = periodKeys.toList();
-    // 日付キーを降順にソート (最新の期間が上に来るように)
     sortedKeys.sort((a, b) => b.compareTo(a));
 
     setState(() {
@@ -161,22 +168,19 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
 
     List<TimeEntry> filteredEntries = allEntries;
     
-if (_selectedPeriodKey.isNotEmpty) {
+    if (_selectedPeriodKey.isNotEmpty) {
       filteredEntries = allEntries.where((entry) {
         final date = DateTime.fromMillisecondsSinceEpoch(entry.timestamp);
         String entryKey = '';
 
         if (_selectedGranularity == GRAN_YEAR) {
             entryKey = DateFormat('yyyy年').format(date);
-        // 修正: getGranularity() を _selectedGranularity に変更
-        } else if (_selectedGranularity == GRAN_MONTH) { 
+        } else if (_selectedGranularity == GRAN_MONTH) {
             entryKey = DateFormat('yyyy年MM月').format(date);
-        // 修正: getGranularity() を _selectedGranularity に変更
-        } else if (_selectedGranularity == GRAN_WEEK) { 
+        } else if (_selectedGranularity == GRAN_WEEK) {
             final startOfWeek = _findStartOfWeek(date);
             entryKey = DateFormat('yyyy/MM/dd (週)').format(startOfWeek);
-        // 修正: getGranularity() を _selectedGranularity に変更
-        } else if (_selectedGranularity == GRAN_DAY) { 
+        } else if (_selectedGranularity == GRAN_DAY) {
             entryKey = DateFormat('yyyy/MM/dd').format(date);
         } else {
             return true;
@@ -205,7 +209,7 @@ if (_selectedPeriodKey.isNotEmpty) {
     });
   }
 
-  // 直近14日間の記録を日別に集計する関数 (変更なし)
+  // 直近14日間の記録を日別に集計する関数
   void _aggregateDailyTrend(List<TimeEntry> allEntries) {
     if (allEntries.isEmpty) {
         setState(() {
@@ -281,8 +285,20 @@ if (_selectedPeriodKey.isNotEmpty) {
       if (mounted) { setState(() { _isLoading = false; }); }
     }
   }
+  
+  // 💡 NEW: 外部から呼び出せるリフレッシュメソッド
+  Future<void> refreshData() async {
+    await _loadSavedHistory();
+  }
 
-  // 日時を整形するヘルパー関数
+  // Helper: 日付のみを YYYY/MM/DD 形式で整形 (共有ヘッダー用)
+  String _formatOnlyDate(int timestamp) {
+    if (timestamp == 0) return '----/--/--';
+    final DateTime recordTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    return DateFormat('yyyy/MM/dd').format(recordTime);
+  }
+
+  // Helper: 日時を整形するヘルパー関数
   String _formatDate(int timestamp) {
     if (timestamp == 0) return '日時不明';
     final DateTime recordTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
@@ -291,20 +307,51 @@ if (_selectedPeriodKey.isNotEmpty) {
     catch (e) { return '${recordTime.month.toString().padLeft(2, '0')}-${recordTime.day.toString().padLeft(2, '0')} ${recordTime.hour.toString().padLeft(2, '0')}:${recordTime.minute.toString().padLeft(2, '0')}'; }
   }
 
+  // 修正: ウィジェットを画像としてキャプチャし共有する汎用関数
+  Future<void> _captureAndShareWidget(GlobalKey key, String title) async {
+    RenderRepaintBoundary? boundary = key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+
+    if (boundary == null) {
+      await Future.delayed(const Duration(milliseconds: 10));
+      boundary = key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) return;
+    }
+
+    ui.Image image = await boundary.toImage(pixelRatio: 3.0); 
+    ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) return;
+
+    Uint8List pngBytes = byteData.buffer.asUint8List();
+
+    // 一時ファイルとして保存
+    final directory = await getTemporaryDirectory();
+    final imagePath = await File('${directory.path}/${title.replaceAll(' ', '_')}.png').create();
+    await imagePath.writeAsBytes(pngBytes);
+
+    // share_plus で共有
+    await Share.shareXFiles([XFile(imagePath.path)], text: '学習時間の記録データです!\nlittle timer アプリを利用して計測しました。\n link: https://github.com/yuki-4201/-little_timer_relese');
+  }
+
 
   @override
   Widget build(BuildContext context) {
     final bool hasData = _historyList.isNotEmpty;
 
-    // 修正: Column全体をSingleChildScrollViewでラップ
+    // アプリ名と期間のヘッダーロジック
+    final String appName = 'Little Timer'; 
+    String periodText = '履歴なし';
+    if (hasData && _historyList.isNotEmpty) {
+        final startMs = _historyList.first.timestamp;
+        final endMs = _historyList.last.timestamp;
+        final startDate = _formatOnlyDate(startMs);
+        final endDate = _formatOnlyDate(endMs);
+        periodText = '$startDate から $endDate までの合計';
+    }
+
+
     return SingleChildScrollView(
       child: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.all(20.0),
-            child: Text('History', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          ),
-          
           // --- 7/14日間推移グラフ セクション (上部) ---
           if (!_isLoading && _dailyTrendData.isNotEmpty)
             Container(
@@ -337,7 +384,6 @@ if (_selectedPeriodKey.isNotEmpty) {
             ),
           // --- End 7/14日間推移グラフ セクション ---
 
-
           
           // --- 粒度選択プルダウン (1/2: 粒度) ---
           Padding(
@@ -363,25 +409,26 @@ if (_selectedPeriodKey.isNotEmpty) {
           const SizedBox(height: 10),
           
           // --- 期間選択プルダウン (2/2: 特定期間) ---
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: DropdownButton<String>(
-              value: _selectedPeriodKey,
-              isExpanded: true,
-              underline: Container(height: 1, color: Colors.grey),
-              items: _availablePeriods.map((String value) {
-                return DropdownMenuItem<String>(value: value, child: Text(value));
-              }).toList(),
-              onChanged: (String? newValue) {
-                if (newValue != null) {
-                  setState(() {
-                    _selectedPeriodKey = newValue;
-                    _aggregateSubjectTimes(_historyList);
-                  });
-                }
-              },
+          if (_availablePeriods.isNotEmpty) // データがない場合は表示しない
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: DropdownButton<String>(
+                value: _selectedPeriodKey,
+                isExpanded: true,
+                underline: Container(height: 1, color: Colors.grey),
+                items: _availablePeriods.map((String value) {
+                  return DropdownMenuItem<String>(value: value, child: Text(value));
+                }).toList(),
+                onChanged: (String? newValue) {
+                  if (newValue != null) {
+                    setState(() {
+                      _selectedPeriodKey = newValue;
+                      _aggregateSubjectTimes(_historyList);
+                    });
+                  }
+                },
+              ),
             ),
-          ),
           const SizedBox(height: 10),
 
 
@@ -392,7 +439,7 @@ if (_selectedPeriodKey.isNotEmpty) {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 修正: 合計時間表示を追加
+                  // 合計時間表示
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -402,40 +449,86 @@ if (_selectedPeriodKey.isNotEmpty) {
                   ),
                   const SizedBox(height: 15),
 
-                  // 円グラフ
-                  Center(child: Padding(padding: const EdgeInsets.only(bottom: 20.0), child: _PieChart(data: _aggregatedData, totalMs: _grandTotalMs, colors: _chartColors))),
-
-                  const SizedBox(height: 10),
-                  ..._aggregatedData.asMap().entries.map((entry) {
-                    final data = entry.value;
-                    final index = entry.key;
-                    double percentage = _grandTotalMs > 0 ? data.totalMilliseconds / _grandTotalMs : 0;
-                    final Color barColor = _chartColors[index % _chartColors.length];
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
+                  // 💡 円グラフと棒グラフのキャプチャ対象 RepaintBoundary
+                  RepaintBoundary(
+                    key: _combinedChartKey, 
+                    child: Container(
+                      color: Theme.of(context).scaffoldBackgroundColor, // 背景色を指定
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(width: 10, height: 10, decoration: BoxDecoration(color: barColor, shape: BoxShape.circle)),
-                          const SizedBox(width: 8),
-
-                          SizedBox(width: 60, child: Text(data.subject, style: TextStyle(fontSize: 14, color: Colors.blueGrey))),
-                          const SizedBox(width: 8),
-                          Expanded(
+                          // NEW HEADER: アプリ名と期間の表示
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 10.0),
+                              child: Column(
+                                children: [
+                                  Text(periodText, style: TextStyle(fontSize: 12, color: Colors.grey)),
+                                  const SizedBox(height: 4), 
+                                  // 修正: 合計時間: HH:MM:SS を追加
+                                  Text(
+                                    '合計時間: ${_formatAggregateTime(_grandTotalMs)}', 
+                                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.red),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          // 1. 円グラフ
+                          Center(
                             child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('${data.formattedTime} (${(percentage * 100).toStringAsFixed(1)}%)', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                                const SizedBox(height: 4),
-                                Container(height: 10, width: MediaQuery.of(context).size.width * 0.65 * percentage, decoration: BoxDecoration(color: barColor.withOpacity(0.7), borderRadius: BorderRadius.circular(5))),
+                                Padding(padding: const EdgeInsets.only(bottom: 10.0), child: _PieChart(data: _aggregatedData, totalMs: _grandTotalMs, colors: _chartColors)),
+                                const Divider(height: 20),
                               ],
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          ..._aggregatedData.asMap().entries.map((entry) {
+                            final data = entry.value;
+                            final index = entry.key;
+                            double percentage = _grandTotalMs > 0 ? data.totalMilliseconds / _grandTotalMs : 0;
+                            final Color barColor = _chartColors[index % _chartColors.length];
+
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8.0),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Container(width: 10, height: 10, decoration: BoxDecoration(color: barColor, shape: BoxShape.circle)),
+                                  const SizedBox(width: 8),
+
+                                  SizedBox(width: 60, child: Text(data.subject, style: TextStyle(fontSize: 14, color: Colors.blueGrey))),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('${data.formattedTime} (${(percentage * 100).toStringAsFixed(1)}%)', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                                        const SizedBox(height: 4),
+                                        Container(height: 10, width: MediaQuery.of(context).size.width * 0.65 * percentage, decoration: BoxDecoration(color: barColor.withOpacity(0.7), borderRadius: BorderRadius.circular(5))),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
                         ],
                       ),
-                    );
-                  }).toList(),
+                    ),
+                  ),
+                  
+                  // 棒グラフ共有ボタン
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => _captureAndShareWidget(_combinedChartKey, '教科別学習グラフ'),
+                      icon: const Icon(Icons.share, size: 20),
+                      label: const Text('結果を共有する'),
+                    ),
+                  ),
                   const Divider(height: 20),
                 ],
               ),
@@ -463,7 +556,6 @@ if (_selectedPeriodKey.isNotEmpty) {
               ),
             ),
           // --- End 履歴詳細ボタン ---
-
 
           const SizedBox(height: 20),
         ],
