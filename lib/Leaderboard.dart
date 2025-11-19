@@ -16,7 +16,7 @@ const String GRAN_YEAR = '年';
 const String GRAN_MONTH = '月';
 const String GRAN_WEEK = '週';
 const String GRAN_DAY = '日';
-const List<String> GRANULARITIES = [GRAN_YEAR, GRAN_MONTH, GRAN_WEEK, GRAN_DAY];
+const List<String> GRANULARITIES = [GRAN_DAY, GRAN_WEEK, GRAN_MONTH, GRAN_YEAR];
 
 // TimerPageと共有されるキー
 const String _historyKey = 'stopwatch_history_list'; 
@@ -67,7 +67,8 @@ class LeaderboardPageState extends State<LeaderboardPage> {
   List<DailyTime> _dailyTrendData = []; 
   int _dailyTrendMaxMs = 0;           
 
-  String _selectedGranularity = GRAN_YEAR;
+  // デフォルトは日単位で表示する
+  String _selectedGranularity = GRAN_DAY;
   String _selectedPeriodKey = '';
   List<String> _availablePeriods = [];
 
@@ -112,7 +113,7 @@ class LeaderboardPageState extends State<LeaderboardPage> {
     return DateTime(date.year, date.month, date.day).subtract(Duration(days: daysToSubtract));
   }
   
-  // 履歴から選択可能な期間を生成する
+  // 履歴から選択可能な期間を生成する (変更なし)
   void _generateAvailablePeriods(List<TimeEntry> entries) {
     if (entries.isEmpty) {
         setState(() {
@@ -129,17 +130,17 @@ class LeaderboardPageState extends State<LeaderboardPage> {
         final date = DateTime.fromMillisecondsSinceEpoch(entry.timestamp);
         String key;
 
-        if (formatKey == GRAN_YEAR) {
-            key = DateFormat('yyyy年').format(date);
+        if (formatKey == GRAN_DAY){
+          key = DateFormat('yyyy/MM/dd').format(date);
+        } else if (formatKey == GRAN_WEEK){ 
+          final startOfWeek = _findStartOfWeek(date);
+          key = DateFormat('yyyy/MM/dd (週)').format(startOfWeek);
         } else if (formatKey == GRAN_MONTH) {
-            key = DateFormat('yyyy年MM月').format(date);
-        } else if (formatKey == GRAN_WEEK) {
-            final startOfWeek = _findStartOfWeek(date);
-            key = DateFormat('yyyy/MM/dd (週)').format(startOfWeek);
-        } else if (formatKey == GRAN_DAY) {
-            key = DateFormat('yyyy/MM/dd').format(date);
+          key = DateFormat('yyyy年MM月').format(date);
+        } else if (formatKey == GRAN_YEAR) {
+          key = DateFormat('yyyy年').format(date);
         } else {
-            continue;
+          continue;
         }
         periodKeys.add(key);
     }
@@ -156,7 +157,7 @@ class LeaderboardPageState extends State<LeaderboardPage> {
   }
 
 
-  // 履歴データから教科別合計時間を集計する関数 (フィルター処理あり)
+  // 履歴データから教科別合計時間を集計する関数 (変更なし)
   void _aggregateSubjectTimes(List<TimeEntry> allEntries) {
     if (allEntries.isEmpty) {
       setState(() {
@@ -173,16 +174,15 @@ class LeaderboardPageState extends State<LeaderboardPage> {
         final date = DateTime.fromMillisecondsSinceEpoch(entry.timestamp);
         String entryKey = '';
 
-        if (_selectedGranularity == GRAN_YEAR) {
-            entryKey = DateFormat('yyyy年').format(date);
+        if (_selectedGranularity == GRAN_DAY) {
+            entryKey = DateFormat('yyyy/MM/dd').format(date);
+        } else if (_selectedGranularity == GRAN_WEEK) {
+            entryKey = DateFormat('yyyy/MM/dd (週)').format(_findStartOfWeek(date));
         } else if (_selectedGranularity == GRAN_MONTH) {
             entryKey = DateFormat('yyyy年MM月').format(date);
-        } else if (_selectedGranularity == GRAN_WEEK) {
-            final startOfWeek = _findStartOfWeek(date);
-            entryKey = DateFormat('yyyy/MM/dd (週)').format(startOfWeek);
-        } else if (_selectedGranularity == GRAN_DAY) {
-            entryKey = DateFormat('yyyy/MM/dd').format(date);
-        } else {
+        } else if (_selectedGranularity == GRAN_YEAR) {
+            entryKey = DateFormat('yyyy年').format(date);
+        }else {
             return true;
         }
         return entryKey == _selectedPeriodKey;
@@ -209,7 +209,7 @@ class LeaderboardPageState extends State<LeaderboardPage> {
     });
   }
 
-  // 直近14日間の記録を日別に集計する関数
+  // 直近14日間の記録を日別に集計する関数 (変更なし)
   void _aggregateDailyTrend(List<TimeEntry> allEntries) {
     if (allEntries.isEmpty) {
         setState(() {
@@ -323,13 +323,39 @@ class LeaderboardPageState extends State<LeaderboardPage> {
 
     Uint8List pngBytes = byteData.buffer.asUint8List();
 
+    // 1. 共有メッセージの組み立て
+    String subjectSummary = '';
+    for (var data in _aggregatedData) {
+      double percentage = _grandTotalMs > 0 ? data.totalMilliseconds / _grandTotalMs : 0;
+      subjectSummary += 
+          '・${data.subject}: ${data.formattedTime} (${(percentage * 100).toStringAsFixed(1)}%)\n';
+    }
+
+    String periodText = '全期間の合計';
+    if (_historyList.isNotEmpty) {
+        final startDate = _formatOnlyDate(_historyList.first.timestamp);
+        final endDate = _formatOnlyDate(_historyList.last.timestamp);
+    }
+    
+    // 💡 修正: Line等のSNSアプリでテキストが画像と分離しにくいように、全体を明確なブロックとして整形
+    final String shareMessage = """
+    【Little Timer 学習グラフ】
+
+    合計学習時間: ${_formatAggregateTime(_grandTotalMs)}
+    
+    #LittleTimer #勉強記録
+    """;
+
     // 一時ファイルとして保存
     final directory = await getTemporaryDirectory();
     final imagePath = await File('${directory.path}/${title.replaceAll(' ', '_')}.png').create();
     await imagePath.writeAsBytes(pngBytes);
 
     // share_plus で共有
-    await Share.shareXFiles([XFile(imagePath.path)], text: '学習時間の記録データです!\nlittle timer アプリを利用して計測しました。\n link: https://github.com/yuki-4201/-little_timer_relese');
+    await Share.shareXFiles(
+      [XFile(imagePath.path)], 
+      text: shareMessage // 💡 動的に生成されたテキストを送信
+    );
   }
 
 
@@ -352,6 +378,12 @@ class LeaderboardPageState extends State<LeaderboardPage> {
     return SingleChildScrollView(
       child: Column(
         children: [
+          
+          const Padding(
+            padding: EdgeInsets.all(20.0),
+            child: Text('History', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          ),
+          
           // --- 7/14日間推移グラフ セクション (上部) ---
           if (!_isLoading && _dailyTrendData.isNotEmpty)
             Container(
@@ -359,7 +391,7 @@ class LeaderboardPageState extends State<LeaderboardPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('最近の記録', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text('最近の推移', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   _LineChart(data: _dailyTrendData, maxMs: _dailyTrendMaxMs),
                   Padding(
@@ -444,7 +476,6 @@ class LeaderboardPageState extends State<LeaderboardPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('合計学習時間', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      Text(_formatAggregateTime(_grandTotalMs), style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.redAccent)),
                     ],
                   ),
                   const SizedBox(height: 15),
@@ -454,7 +485,7 @@ class LeaderboardPageState extends State<LeaderboardPage> {
                     key: _combinedChartKey, 
                     child: Container(
                       color: Theme.of(context).scaffoldBackgroundColor, // 背景色を指定
-                      padding: const EdgeInsets.all(16.0),
+                      padding: const EdgeInsets.all(1.0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -464,8 +495,6 @@ class LeaderboardPageState extends State<LeaderboardPage> {
                               padding: const EdgeInsets.only(bottom: 10.0),
                               child: Column(
                                 children: [
-                                  Text(periodText, style: TextStyle(fontSize: 12, color: Colors.grey)),
-                                  const SizedBox(height: 4), 
                                   // 修正: 合計時間: HH:MM:SS を追加
                                   Text(
                                     '合計時間: ${_formatAggregateTime(_grandTotalMs)}', 
@@ -480,7 +509,6 @@ class LeaderboardPageState extends State<LeaderboardPage> {
                             child: Column(
                               children: [
                                 Padding(padding: const EdgeInsets.only(bottom: 10.0), child: _PieChart(data: _aggregatedData, totalMs: _grandTotalMs, colors: _chartColors)),
-                                const Divider(height: 20),
                               ],
                             ),
                           ),
@@ -526,7 +554,7 @@ class LeaderboardPageState extends State<LeaderboardPage> {
                     child: TextButton.icon(
                       onPressed: () => _captureAndShareWidget(_combinedChartKey, '教科別学習グラフ'),
                       icon: const Icon(Icons.share, size: 20),
-                      label: const Text('結果を共有する'),
+                      label: const Text('共有'),
                     ),
                   ),
                   const Divider(height: 20),
@@ -550,7 +578,7 @@ class LeaderboardPageState extends State<LeaderboardPage> {
                   );
                 },
                 child: const Text(
-                  '直近100件のデータを見る',
+                  '最近の記録を見る',
                   style: TextStyle(fontSize: 16, color: Colors.blue, fontWeight: FontWeight.bold),
                 ),
               ),
