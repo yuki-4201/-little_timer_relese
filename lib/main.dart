@@ -12,8 +12,12 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 修正: primaryColor 参照のために ThemeData を設定
     return MaterialApp(
       title: 'Little Timer',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+      ),
       home: const BottomNavPage(title: 'Little Timer'),
     );
   }
@@ -29,36 +33,69 @@ class BottomNavPage extends StatefulWidget {
 class _BottomNavPageState extends State<BottomNavPage> {
   int _selectedIndex = 0;
   
-  // 💡 修正: GlobalKeyの型引数を公開されたStateクラス名に修正
+  // タイマー実行状態を保持する (リーダーボード無効化用)
+  bool _isTimerRunning = false; 
+
+  // GlobalKey for LeaderboardPage's state
   final GlobalKey<leaderboard.LeaderboardPageState> _leaderboardKey = GlobalKey();
+  
+  // 💡 NEW: GlobalKey for TimerPage's state
+  final GlobalKey<timer_page.TimerPageState> _timerPageKey = GlobalKey();
 
   late final List<Widget> _widgetOptions;
 
   @override
   void initState() {
     super.initState();
-    // Keyを渡してLeaderboardPageを初期化
+    // Keyを渡して各ページを初期化
     _widgetOptions = <Widget>[
-      timer_page.TimerPage(),
-      leaderboard.LeaderboardPage(key: _leaderboardKey), // Keyを渡す
+      // 💡 修正: TimerPageにKeyを渡す
+      timer_page.TimerPage(
+        key: _timerPageKey, // Keyを渡す
+        onStateChange: (bool isRunning) {
+          setState(() {
+            _isTimerRunning = isRunning;
+          });
+        },
+      ),
+      leaderboard.LeaderboardPage(key: _leaderboardKey), 
     ];
   }
 
   void _onItemTapped(int index) {
+    // 💡 修正: タイマー実行中に Leaderboard タブを選択した場合、移動をキャンセル
+    if (_isTimerRunning && index == 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('タイマー動作中はHistoryに移動できません。')),
+      );
+      return;
+    }
+    
     setState(() {
       _selectedIndex = index;
     });
+
+    // Leaderboard タブに移動したときにデータを強制リフレッシュ
+    if (index == 1) {
+      _leaderboardKey.currentState?.refreshData();
+    }
+    // タイマータブに移動したときは教科リストを更新
+    if (index == 0) {
+      _timerPageKey.currentState?.refreshSubjects();
+    }
   }
 
-  // 💡 設定画面を開くためのロジック
   void _openSettingsPage(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => SettingsPage(
-          // データのインポートが完了したら LeaderboardPage の refreshData を呼び出し
           onDataChange: () {
+            // データのインポート/設定変更が完了したら各ページをリロード
             _leaderboardKey.currentState?.refreshData();
-            Navigator.of(context).pop(); 
+            // 💡 NEW: TimerPageの教科リストをリロード
+            _timerPageKey.currentState?.refreshSubjects();
+            
+            Navigator.of(context).pop();
           },
         ),
       ),
@@ -67,9 +104,15 @@ class _BottomNavPageState extends State<BottomNavPage> {
 
 @override
   Widget build(BuildContext context) {
+    // Leaderboard タブが無効化されているかどうかの判定
+    final bool isLeaderboardDisabled = _isTimerRunning;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
+        // Make AppBar transparent and remove shadow
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -77,23 +120,28 @@ class _BottomNavPageState extends State<BottomNavPage> {
           ),
         ],
       ),
-      body: Center(
-        child: _widgetOptions.elementAt(_selectedIndex),
+      // IndexedStackを使用して、全ての子ウィジェットの状態を保持
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: _widgetOptions,
       ),
       
       bottomNavigationBar: BottomNavigationBar(
-        items: const <BottomNavigationBarItem>[
+        items: <BottomNavigationBarItem>[
           BottomNavigationBarItem(
             icon: Icon(Icons.timer),
             label: 'Timer',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.leaderboard),
+            // 💡 修正: 無効化を示すためにOpacityと色を調整
+            icon: Opacity(
+              opacity: isLeaderboardDisabled ? 0.5 : 1.0,
+              child: Icon(Icons.leaderboard),
+            ),
             label: 'History',
           ),
         ],
         currentIndex: _selectedIndex,
-        selectedItemColor: Theme.of(context).primaryColor,
         onTap: _onItemTapped,
       ),
     );
